@@ -109,8 +109,12 @@ const MESSAGES = [
   { id: 3, user: USERS_DATA[0], text: "Когда встретимся?",                           time: "Пн",     unread: 0 },
 ];
 
-type Tab   = "feed"|"profile"|"messages"|"notifications"|"search"|"recommendations";
-type Modal = "none"|"comments"|"repost"|"share"|"avatar"|"story"|"editProfile";
+const AI_URL = "https://functions.poehali.dev/d48e422e-a54f-4e76-b021-c12de8a5ecc4";
+
+type Tab     = "feed"|"profile"|"messages"|"notifications"|"search"|"recommendations"|"ai";
+type Modal   = "none"|"comments"|"repost"|"share"|"avatar"|"story"|"editProfile";
+type AiMode  = "text"|"image"|"video";
+type AiMessage = { id: number; role: "user"|"ai"; text: string; image?: string; mode: AiMode };
 
 // ── PostCard Component ────────────────────────────────────────────────────────
 function PostCard({ post, onLike, onComments, onRepost, onShare }: {
@@ -265,6 +269,18 @@ export default function Index() {
   // profile editing
   const [profile, setProfile] = useState({ name: "Алиса Фокс", handle: "@alice_fox", bio: "Дизайнер • Фотограф • Путешественница 🦊", city: "Москва", website: "alice.foxnet.app" });
   const [draftProfile, setDraftProfile] = useState(profile);
+  const [coverImage, setCoverImage] = useState<string | null>(null);
+  const [coverGradient, setCoverGradient] = useState("linear-gradient(135deg,#0DCCB1,#1E8FFF)");
+  const coverFileRef = useRef<HTMLInputElement>(null);
+
+  // AI assistant
+  const [aiMode, setAiMode] = useState<AiMode>("text");
+  const [aiInput, setAiInput] = useState("");
+  const [aiMessages, setAiMessages] = useState<AiMessage[]>([
+    { id: 0, role: "ai", text: "Привет! Я ИИ-ассистент FoxNet 🦊 Выбери режим и задай вопрос — помогу с текстом, нарисую картинку или придумаю концепцию видео.", mode: "text" },
+  ]);
+  const [aiLoading, setAiLoading] = useState(false);
+  const aiChatRef = useRef<HTMLDivElement>(null);
 
   const fileInputRef    = useRef<HTMLInputElement>(null);
 
@@ -349,6 +365,41 @@ export default function Index() {
   const saveAvatar = () => { setMyAvatar(draftAvatar); setUseCustomAvatar(true); closeModal(); };
   const saveProfile = () => { setProfile(draftProfile); closeModal(); };
 
+  const handleCoverUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => setCoverImage(ev.target?.result as string);
+    reader.readAsDataURL(file);
+  };
+
+  const handleAiSend = async () => {
+    const prompt = aiInput.trim(); if (!prompt || aiLoading) return;
+    const userMsg: AiMessage = { id: Date.now(), role: "user", text: prompt, mode: aiMode };
+    setAiMessages(prev => [...prev, userMsg]);
+    setAiInput("");
+    setAiLoading(true);
+    try {
+      const resp = await fetch(AI_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: aiMode, prompt }),
+      });
+      const data = await resp.json();
+      if (data.error) {
+        setAiMessages(prev => [...prev, { id: Date.now()+1, role: "ai", text: `⚠️ ${data.error}`, mode: aiMode }]);
+      } else if (aiMode === "image") {
+        setAiMessages(prev => [...prev, { id: Date.now()+1, role: "ai", text: data.revised_prompt || prompt, image: data.result, mode: "image" }]);
+      } else {
+        setAiMessages(prev => [...prev, { id: Date.now()+1, role: "ai", text: data.result, mode: aiMode }]);
+      }
+    } catch {
+      setAiMessages(prev => [...prev, { id: Date.now()+1, role: "ai", text: "⚠️ Ошибка соединения с ИИ", mode: aiMode }]);
+    } finally {
+      setAiLoading(false);
+      setTimeout(() => aiChatRef.current?.scrollTo({ top: 99999, behavior: "smooth" }), 100);
+    }
+  };
+
   const filteredPosts = posts.filter(p =>
     p.text.toLowerCase().includes(searchQuery.toLowerCase()) ||
     p.user.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -361,6 +412,7 @@ export default function Index() {
     { id: "feed",            icon: "Home",          label: "Лента" },
     { id: "search",          icon: "Search",        label: "Поиск" },
     { id: "recommendations", icon: "Sparkles",      label: "Рекомендации" },
+    { id: "ai",              icon: "Bot",           label: "ИИ-студия" },
     { id: "messages",        icon: "MessageCircle", label: "Сообщения", badge: 2 },
     { id: "notifications",   icon: "Bell",          label: "Уведомления", badge: unreadNotifs },
     { id: "profile",         icon: "User",          label: "Профиль" },
@@ -872,6 +924,120 @@ export default function Index() {
           </div>
         )}
 
+        {/* AI STUDIO */}
+        {activeTab === "ai" && (
+          <div className="flex flex-col h-[calc(100vh-100px)] animate-fade-up">
+            {/* Header */}
+            <div className="fn-card p-4 mb-4">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 rounded-xl fn-gradient fn-glow flex items-center justify-center">
+                  <Icon name="Bot" size={20} className="text-white" />
+                </div>
+                <div>
+                  <h2 className="font-bold text-white text-lg">ИИ-студия FoxNet</h2>
+                  <p className="text-white/40 text-xs">Текст · Картинки · Видеосценарии</p>
+                </div>
+              </div>
+              {/* Mode switcher */}
+              <div className="grid grid-cols-3 gap-2">
+                {([
+                  { id: "text",  icon: "MessageSquare", label: "Текст",    desc: "GPT-4o" },
+                  { id: "image", icon: "ImagePlus",     label: "Картинка", desc: "DALL-E 3" },
+                  { id: "video", icon: "Clapperboard",  label: "Видео",    desc: "Сценарий" },
+                ] as { id: AiMode; icon: string; label: string; desc: string }[]).map(m => (
+                  <button key={m.id} onClick={() => setAiMode(m.id)}
+                    className={`p-3 rounded-xl text-center transition-all ${aiMode === m.id ? "fn-gradient fn-glow text-white" : "bg-white/5 text-white/50 hover:bg-white/10 hover:text-white"}`}>
+                    <Icon name={m.icon} size={18} className="mx-auto mb-1" />
+                    <p className="text-xs font-semibold">{m.label}</p>
+                    <p className="text-[10px] opacity-60">{m.desc}</p>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Chat */}
+            <div ref={aiChatRef} className="flex-1 overflow-y-auto space-y-3 mb-4 pr-1">
+              {aiMessages.map(msg => (
+                <div key={msg.id} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"} gap-2`}>
+                  {msg.role === "ai" && (
+                    <div className="w-7 h-7 rounded-full fn-gradient flex-shrink-0 flex items-center justify-center mt-1">
+                      <span className="text-xs">🤖</span>
+                    </div>
+                  )}
+                  <div className={`max-w-[85%] rounded-2xl px-4 py-3 ${msg.role === "user" ? "fn-gradient text-white rounded-br-sm" : "bg-white/7 text-white/90 rounded-bl-sm"}`}>
+                    {msg.image ? (
+                      <div>
+                        <img src={msg.image} className="rounded-xl w-full mb-2" alt="AI generated" />
+                        <p className="text-xs text-white/50 italic">{msg.text}</p>
+                      </div>
+                    ) : (
+                      <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.text}</p>
+                    )}
+                    {msg.role === "ai" && msg.image && (
+                      <button
+                        onClick={() => {
+                          const np: Post = { id: Date.now(), user: USERS_DATA[0], text: `Создано с помощью ИИ 🤖✨`, image: msg.image!, likes: 0, comments: 0, reposts: 0, liked: false, time: "только что", tags: ["нейросеть","ИИ"], commentList: [] };
+                          setPosts(prev => [np, ...prev]);
+                          setActiveTab("feed");
+                        }}
+                        className="mt-2 flex items-center gap-1.5 text-xs text-[var(--fn-teal)] hover:opacity-80 transition-opacity"
+                      >
+                        <Icon name="Share2" size={12} />Опубликовать в ленту
+                      </button>
+                    )}
+                    {msg.role === "ai" && !msg.image && msg.id !== 0 && (
+                      <button
+                        onClick={() => {
+                          const np: Post = { id: Date.now(), user: USERS_DATA[0], text: msg.text, image: null, likes: 0, comments: 0, reposts: 0, liked: false, time: "только что", tags: ["нейросеть"], commentList: [] };
+                          setPosts(prev => [np, ...prev]);
+                          setActiveTab("feed");
+                        }}
+                        className="mt-2 flex items-center gap-1.5 text-xs text-[var(--fn-teal)] hover:opacity-80 transition-opacity"
+                      >
+                        <Icon name="Share2" size={12} />Опубликовать в ленту
+                      </button>
+                    )}
+                  </div>
+                  {msg.role === "user" && (
+                    <div className="w-7 h-7 rounded-full bg-white/10 flex-shrink-0 flex items-center justify-center mt-1">
+                      <span className="text-xs">🦊</span>
+                    </div>
+                  )}
+                </div>
+              ))}
+              {aiLoading && (
+                <div className="flex gap-2 items-start">
+                  <div className="w-7 h-7 rounded-full fn-gradient flex-shrink-0 flex items-center justify-center"><span className="text-xs">🤖</span></div>
+                  <div className="bg-white/7 rounded-2xl rounded-bl-sm px-4 py-3 flex items-center gap-2">
+                    <div className="flex gap-1">
+                      {[0,1,2].map(i => <div key={i} className="w-2 h-2 rounded-full bg-[var(--fn-teal)] animate-bounce" style={{ animationDelay: `${i*0.15}s` }} />)}
+                    </div>
+                    <span className="text-white/40 text-xs">
+                      {aiMode === "image" ? "Рисую картинку..." : aiMode === "video" ? "Придумываю сценарий..." : "Думаю..."}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Input */}
+            <div className="fn-card p-3 flex gap-2">
+              <Input
+                value={aiInput}
+                onChange={e => setAiInput(e.target.value)}
+                placeholder={aiMode === "image" ? "Опиши картинку..." : aiMode === "video" ? "Тема для видео..." : "Задай вопрос..."}
+                className="bg-white/5 border-white/10 text-white placeholder:text-white/30 rounded-xl text-sm"
+                onKeyDown={e => e.key === "Enter" && !e.shiftKey && handleAiSend()}
+                disabled={aiLoading}
+              />
+              <button onClick={handleAiSend} disabled={!aiInput.trim() || aiLoading}
+                className="fn-gradient w-11 h-10 rounded-xl flex items-center justify-center fn-glow disabled:opacity-40 hover:opacity-90 flex-shrink-0">
+                <Icon name={aiMode === "image" ? "ImagePlus" : "Send"} size={16} className="text-white" />
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* NOTIFICATIONS */}
         {activeTab === "notifications" && (
           <div className="space-y-3 animate-fade-up">
@@ -898,10 +1064,31 @@ export default function Index() {
         {activeTab === "profile" && (
           <div className="animate-fade-up">
             <div className="fn-card overflow-hidden mb-4">
-              <div className="h-36 relative">
-                <div className="absolute inset-0" style={{ backgroundImage: `url(${POST_IMG})`, backgroundSize: "cover", backgroundPosition: "center" }} />
-                <div className="absolute inset-0 fn-gradient opacity-50" />
+              {/* Cover — кликабельная */}
+              <div className="h-40 relative group cursor-pointer" onClick={() => coverFileRef.current?.click()}>
+                {coverImage
+                  ? <img src={coverImage} className="absolute inset-0 w-full h-full object-cover" alt="cover" />
+                  : <div className="absolute inset-0" style={{ background: coverGradient }} />
+                }
+                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-all flex items-center justify-center">
+                  <div className="opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center gap-2">
+                    <div className="bg-black/50 rounded-xl px-4 py-2 flex items-center gap-2 text-white">
+                      <Icon name="Camera" size={16} />
+                      <span className="text-sm font-medium">Изменить шапку</span>
+                    </div>
+                  </div>
+                </div>
+                {/* Gradient presets */}
+                <div className="absolute bottom-2 right-2 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                  {["linear-gradient(135deg,#0DCCB1,#1E8FFF)","linear-gradient(135deg,#FF6B1A,#FF2D78)","linear-gradient(135deg,#8B2FFF,#EC4899)","linear-gradient(135deg,#0FE086,#0DCCB1)","linear-gradient(135deg,#F7971E,#FFD200)"].map((g, i) => (
+                    <button key={i} onClick={e => { e.stopPropagation(); setCoverImage(null); setCoverGradient(g); }}
+                      className={`w-6 h-6 rounded-full border-2 transition-all ${coverGradient === g && !coverImage ? "border-white scale-110" : "border-white/40 hover:border-white"}`}
+                      style={{ background: g }} />
+                  ))}
+                </div>
               </div>
+              <input ref={coverFileRef} type="file" accept="image/*" className="hidden" onChange={handleCoverUpload} />
+
               <div className="px-5 pb-5">
                 <div className="flex items-end justify-between -mt-10 mb-4">
                   <div className="story-ring cursor-pointer" onClick={() => { setDraftAvatar(myAvatar); setAvatarTab("face"); openModal("avatar"); }}>
